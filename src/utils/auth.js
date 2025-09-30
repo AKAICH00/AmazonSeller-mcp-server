@@ -48,7 +48,7 @@ import axios from 'axios';
     export function generateAWSSignature(method, path, payload = '', queryParams = {}) {
       const region = process.env.SP_API_REGION || 'us-east-1';
       const service = 'execute-api';
-      const host = `sellingpartnerapi-${region}.amazon.com`;
+      const host = `sellingpartnerapi-na.amazon.com`;
       const datetime = new Date().toISOString().replace(/[:-]|\.\d{3}/g, '');
       const date = datetime.substring(0, 8);
 
@@ -118,26 +118,41 @@ import axios from 'axios';
       try {
         const accessToken = await getAccessToken();
         const region = process.env.SP_API_REGION || 'us-east-1';
-        const url = `https://sellingpartnerapi-${region}.amazon.com${path}`;
-        
-        const payload = data ? JSON.stringify(data) : '';
-        const awsHeaders = generateAWSSignature(method, path, payload, queryParams);
-        
+        const url = `https://sellingpartnerapi-na.amazon.com${path}`;
+
+        // AWS signature is optional - only use if AWS credentials are provided
+        const headers = {
+          'x-amz-access-token': accessToken
+        };
+
+        // Only add Content-Type for requests with body
+        if (data) {
+          headers['Content-Type'] = 'application/json';
+        }
+
+        // Add AWS signature if credentials are available
+        if (process.env.SP_API_AWS_ACCESS_KEY && process.env.SP_API_AWS_SECRET_KEY) {
+          console.log('Using AWS signature...');
+          const payload = data ? JSON.stringify(data) : '';
+          const awsHeaders = generateAWSSignature(method, path, payload, queryParams);
+          Object.assign(headers, awsHeaders);
+        } else {
+          console.log('AWS credentials not found, using OAuth only');
+        }
+
         const response = await axios({
           method,
           url,
           params: queryParams,
           data: data,
-          headers: {
-            'x-amz-access-token': accessToken,
-            'Content-Type': 'application/json',
-            ...awsHeaders
-          }
+          headers
         });
         
         return response.data;
       } catch (error) {
         console.error('SP-API request failed:', error.response?.data || error.message);
-        throw new Error(`SP-API request failed: ${error.response?.data?.errors?.[0]?.message || error.message}`);
+        console.error('Status:', error.response?.status);
+        console.error('Headers:', error.response?.headers);
+        throw new Error(`SP-API request failed: ${error.response?.status} - ${error.response?.data?.errors?.[0]?.message || error.message}`);
       }
     }
