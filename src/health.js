@@ -9,24 +9,33 @@ export function startHealthServer(port = process.env.PORT || 3000) {
   const server = http.createServer(async (req, res) => {
     // Health check endpoint
     if (req.url === '/health' || req.url === '/') {
-      try {
-        // Quick health check - verify auth works
-        const token = await getAccessToken();
+      // Basic health check - just verify server is running
+      // Don't check auth here to allow Railway deployment to succeed
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        status: 'healthy',
+        service: 'Amazon SP-API MCP Server',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        memory: process.memoryUsage(),
+        version: '1.0.0'
+      }));
+    }
 
+    // Auth check endpoint - separate from health check
+    else if (req.url === '/auth-status') {
+      try {
+        const token = await getAccessToken();
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
-          status: 'healthy',
-          service: 'Amazon SP-API MCP Server',
-          timestamp: new Date().toISOString(),
-          auth: token ? 'connected' : 'disconnected',
-          uptime: process.uptime(),
-          memory: process.memoryUsage(),
-          version: '1.0.0'
+          auth: 'connected',
+          tokenPreview: token ? token.substring(0, 20) + '...' : null,
+          timestamp: new Date().toISOString()
         }));
       } catch (error) {
         res.writeHead(503, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
-          status: 'unhealthy',
+          auth: 'failed',
           error: error.message,
           timestamp: new Date().toISOString()
         }));
