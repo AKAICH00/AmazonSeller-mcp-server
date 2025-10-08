@@ -5,24 +5,27 @@
       "type": "module",
       "main": "src/index.js",
       "bin": {
-        "amazon-sp-api-mcp": "src/index.js"
+            "amazon-sp-api-mcp": "src/index.js"
       },
       "scripts": {
-        "start": "node src/index.js",
-        "dev": "node --watch src/index.js",
-        "inspect": "npx -y @modelcontextprotocol/inspector node src/index.js"
+            "start": "node src/index.js",
+            "start:http": "node src/http-server.js",
+            "dev": "node --watch src/index.js",
+            "dev:http": "node --watch src/http-server.js",
+            "inspect": "npx -y @modelcontextprotocol/inspector node src/index.js"
       },
       "keywords": [
-        "amazon",
-        "sp-api",
-        "mcp",
-        "selling-partner"
+            "amazon",
+            "sp-api",
+            "mcp",
+            "selling-partner"
       ],
       "dependencies": {
-        "@modelcontextprotocol/sdk": "^1.0.0",
-        "axios": "^1.6.2",
-        "crypto-js": "^4.1.1",
-        "dotenv": "^16.3.1",
-        "zod": "^3.22.4"
+            "@modelcontextprotocol/sdk": "^1.0.0",
+            "axios": "^1.6.2",
+            "crypto-js": "^4.1.1",
+            "dotenv": "^16.3.1",
+            "express": "^5.1.0",
+            "zod": "^3.22.4"
       }
-    }
+}
