@@ -1,9 +1,19 @@
 #!/usr/bin/env node
 import express from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { server } from './server.js';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
+import {
+  OAUTH_CONFIG,
+  generateAuthCode,
+  validateAuthCode,
+  generateAccessToken,
+  validateAccessToken,
+  refreshAccessToken,
+  revokeToken
+} from './oauth.js';
 
 // Load environment variables
 dotenv.config();
@@ -14,36 +24,59 @@ const port = process.env.PORT || 3000;
 // Middleware
 app.use(express.json());
 
-// API Key authentication middleware
-const authenticateApiKey = (req, res, next) => {
-  const apiKey = req.headers['x-api-key'] || req.headers['authorization']?.replace('Bearer ', '');
+// Authentication middleware - supports both OAuth and API Key
+const authenticate = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const apiKey = req.headers['x-api-key'];
 
-  if (!apiKey) {
-    return res.status(401).json({ error: 'API key required. Use X-API-Key header or Authorization: Bearer <key>' });
+  // Try OAuth first
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.substring(7);
+
+    // Check if it's an OAuth token (starts with 'mcp_')
+    if (token.startsWith('mcp_')) {
+      const validation = validateAccessToken(token);
+      if (validation.valid) {
+        req.auth = { type: 'oauth', scope: validation.scope };
+        return next();
+      }
+      return res.status(401).json({ error: validation.error || 'Invalid OAuth token' });
+    }
+
+    // Otherwise treat as API key
+    const validApiKey = process.env.CHATGPT_API_KEY || process.env.API_KEY;
+    if (validApiKey && token === validApiKey) {
+      req.auth = { type: 'api_key' };
+      return next();
+    }
   }
 
-  // Check against environment variable
-  const validApiKey = process.env.CHATGPT_API_KEY || process.env.API_KEY;
+  // Try API Key header
+  if (apiKey) {
+    const validApiKey = process.env.CHATGPT_API_KEY || process.env.API_KEY;
+    if (!validApiKey) {
+      console.error('ERROR: CHATGPT_API_KEY or API_KEY not set in environment variables');
+      return res.status(500).json({ error: 'Server configuration error' });
+    }
 
-  if (!validApiKey) {
-    console.error('ERROR: CHATGPT_API_KEY or API_KEY not set in environment variables');
-    return res.status(500).json({ error: 'Server configuration error' });
+    // Constant-time comparison
+    const apiKeyBuffer = Buffer.from(apiKey);
+    const validKeyBuffer = Buffer.from(validApiKey);
+
+    if (apiKeyBuffer.length === validKeyBuffer.length && crypto.timingSafeEqual(apiKeyBuffer, validKeyBuffer)) {
+      req.auth = { type: 'api_key' };
+      return next();
+    }
   }
 
-  // Constant-time comparison to prevent timing attacks
-  const apiKeyBuffer = Buffer.from(apiKey);
-  const validKeyBuffer = Buffer.from(validApiKey);
-
-  if (apiKeyBuffer.length !== validKeyBuffer.length) {
-    return res.status(403).json({ error: 'Invalid API key' });
-  }
-
-  if (!crypto.timingSafeEqual(apiKeyBuffer, validKeyBuffer)) {
-    return res.status(403).json({ error: 'Invalid API key' });
-  }
-
-  next();
+  return res.status(401).json({
+    error: 'Authentication required',
+    hint: 'Use OAuth 2.0 or API Key (X-API-Key header or Authorization: Bearer <key>)'
+  });
 };
+
+// Legacy alias for backwards compatibility
+const authenticateApiKey = authenticate;
 
 // Health check endpoint (no auth required)
 app.get('/health', (req, res) => {
@@ -51,9 +84,106 @@ app.get('/health', (req, res) => {
     status: 'ok',
     service: 'Amazon SP-API MCP Server',
     version: '1.0.0',
-    transport: 'streamable-http',
+    transport: 'streamable-http + sse + oauth',
     timestamp: new Date().toISOString()
   });
+});
+
+// OAuth 2.0 Authorization Endpoint
+app.get('/oauth/authorize', (req, res) => {
+  const { client_id, redirect_uri, response_type, scope, state } = req.query;
+
+  // Validate required parameters
+  if (!client_id || !redirect_uri || response_type !== 'code') {
+    return res.status(400).json({
+      error: 'invalid_request',
+      error_description: 'Missing or invalid required parameters'
+    });
+  }
+
+  // In production, you'd validate client_id and redirect_uri against registered clients
+  // For now, we auto-approve
+
+  // Generate authorization code
+  const code = generateAuthCode();
+
+  // Redirect back to ChatGPT with code
+  const redirectUrl = new URL(redirect_uri);
+  redirectUrl.searchParams.append('code', code);
+  if (state) {
+    redirectUrl.searchParams.append('state', state);
+  }
+
+  res.redirect(redirectUrl.toString());
+});
+
+// OAuth 2.0 Token Endpoint
+app.post('/oauth/token', express.urlencoded({ extended: true }), (req, res) => {
+  const { grant_type, code, refresh_token, client_id, client_secret } = req.body;
+
+  // Handle authorization_code grant
+  if (grant_type === 'authorization_code') {
+    if (!code) {
+      return res.status(400).json({
+        error: 'invalid_request',
+        error_description: 'Missing authorization code'
+      });
+    }
+
+    // Validate authorization code
+    const validation = validateAuthCode(code);
+    if (!validation.valid) {
+      return res.status(400).json({
+        error: 'invalid_grant',
+        error_description: validation.error
+      });
+    }
+
+    // Generate and return tokens
+    const tokens = generateAccessToken();
+    return res.json(tokens);
+  }
+
+  // Handle refresh_token grant
+  if (grant_type === 'refresh_token') {
+    if (!refresh_token) {
+      return res.status(400).json({
+        error: 'invalid_request',
+        error_description: 'Missing refresh token'
+      });
+    }
+
+    // Refresh the token
+    const result = refreshAccessToken(refresh_token);
+    if (!result.success) {
+      return res.status(400).json({
+        error: 'invalid_grant',
+        error_description: result.error
+      });
+    }
+
+    return res.json(result.tokens);
+  }
+
+  return res.status(400).json({
+    error: 'unsupported_grant_type',
+    error_description: 'Only authorization_code and refresh_token grants are supported'
+  });
+});
+
+// OAuth 2.0 Revocation Endpoint
+app.post('/oauth/revoke', express.urlencoded({ extended: true }), (req, res) => {
+  const { token } = req.body;
+
+  if (!token) {
+    return res.status(400).json({
+      error: 'invalid_request',
+      error_description: 'Missing token'
+    });
+  }
+
+  revokeToken(token);
+  res.status(200).json({ success: true });
 });
 
 // CORS headers for ChatGPT
@@ -71,6 +201,61 @@ app.use('/mcp', (req, res, next) => {
 
 // Store sessions for stateful mode (optional)
 const sessions = new Map();
+const sseTransports = new Map();
+
+// SSE endpoint for OpenAI Custom GPTs - GET establishes stream, POST sends messages
+app.get('/sse', authenticateApiKey, async (req, res) => {
+  try {
+    console.log('SSE connection request');
+
+    // Create a new SSE transport
+    const transport = new SSEServerTransport('/sse', res, {
+      enableDnsRebindingProtection: false
+    });
+
+    // Store transport by session ID
+    sseTransports.set(transport.sessionId, transport);
+
+    // Clean up on close
+    transport.onclose = () => {
+      console.log(`SSE session closed: ${transport.sessionId}`);
+      sseTransports.delete(transport.sessionId);
+    };
+
+    // Connect MCP server to this transport
+    await server.connect(transport);
+
+    // Start the SSE stream
+    await transport.start();
+
+    console.log(`SSE session started: ${transport.sessionId}`);
+  } catch (error) {
+    console.error('Error in SSE connection:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'SSE connection failed', message: error.message });
+    }
+  }
+});
+
+app.post('/sse', authenticateApiKey, async (req, res) => {
+  try {
+    const sessionId = req.headers['mcp-session-id'];
+
+    if (!sessionId || !sseTransports.has(sessionId)) {
+      return res.status(404).json({ error: 'Session not found. Establish SSE connection first (GET /sse)' });
+    }
+
+    const transport = sseTransports.get(sessionId);
+    await transport.handlePostMessage(req, res, req.body);
+
+    console.log(`SSE message processed for session: ${sessionId}`);
+  } catch (error) {
+    console.error('Error processing SSE message:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'SSE message failed', message: error.message });
+    }
+  }
+});
 
 // MCP endpoint with authentication - supports both GET and POST
 app.all('/mcp/messages', authenticateApiKey, async (req, res) => {
