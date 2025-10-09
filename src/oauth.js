@@ -13,24 +13,26 @@ const OAUTH_CONFIG = {
 };
 
 /**
- * Generate authorization code
+ * Generate authorization code with PKCE support
  */
-export function generateAuthCode() {
+export function generateAuthCode(codeChallenge, codeChallengeMethod = 'S256') {
   const code = crypto.randomBytes(32).toString('hex');
   const expiresAt = Date.now() + (10 * 60 * 1000); // 10 minutes
 
   authCodes.set(code, {
     expiresAt,
-    used: false
+    used: false,
+    codeChallenge,
+    codeChallengeMethod
   });
 
   return code;
 }
 
 /**
- * Validate authorization code
+ * Validate authorization code with PKCE verification
  */
-export function validateAuthCode(code) {
+export function validateAuthCode(code, codeVerifier) {
   const authCode = authCodes.get(code);
 
   if (!authCode) {
@@ -44,6 +46,30 @@ export function validateAuthCode(code) {
   if (Date.now() > authCode.expiresAt) {
     authCodes.delete(code);
     return { valid: false, error: 'Authorization code expired' };
+  }
+
+  // Verify PKCE code_verifier if code_challenge was provided
+  if (authCode.codeChallenge) {
+    if (!codeVerifier) {
+      return { valid: false, error: 'code_verifier required for PKCE' };
+    }
+
+    // Compute challenge from verifier
+    let computedChallenge;
+    if (authCode.codeChallengeMethod === 'S256') {
+      computedChallenge = crypto.createHash('sha256')
+        .update(codeVerifier)
+        .digest('base64url');
+    } else if (authCode.codeChallengeMethod === 'plain') {
+      computedChallenge = codeVerifier;
+    } else {
+      return { valid: false, error: 'Invalid code_challenge_method' };
+    }
+
+    // Constant-time comparison
+    if (computedChallenge !== authCode.codeChallenge) {
+      return { valid: false, error: 'Invalid code_verifier' };
+    }
   }
 
   // Mark as used

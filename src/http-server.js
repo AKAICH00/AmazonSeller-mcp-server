@@ -40,6 +40,7 @@ const authenticate = (req, res, next) => {
         req.auth = { type: 'oauth', scope: validation.scope };
         return next();
       }
+      res.setHeader('WWW-Authenticate', `Bearer realm="MCP Server", error="invalid_token", error_description="${validation.error || 'Invalid OAuth token'}"`);
       return res.status(401).json({ error: validation.error || 'Invalid OAuth token' });
     }
 
@@ -69,6 +70,7 @@ const authenticate = (req, res, next) => {
     }
   }
 
+  res.setHeader('WWW-Authenticate', 'Bearer realm="MCP Server", error="invalid_token"');
   return res.status(401).json({
     error: 'Authentication required',
     hint: 'Use OAuth 2.0 or API Key (X-API-Key header or Authorization: Bearer <key>)'
@@ -89,7 +91,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-// OAuth Configuration Discovery (for OpenAI Custom GPTs)
+// OAuth Configuration Discovery (for OpenAI Custom GPTs) - MCP compliant
 app.get('/.well-known/oauth-authorization-server', (req, res) => {
   const baseUrl = `https://${req.get('host')}`;
 
@@ -100,13 +102,13 @@ app.get('/.well-known/oauth-authorization-server', (req, res) => {
     revocation_endpoint: `${baseUrl}/oauth/revoke`,
     response_types_supported: ['code'],
     grant_types_supported: ['authorization_code', 'refresh_token'],
-    token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic'],
+    token_endpoint_auth_methods_supported: ['none', 'client_secret_post', 'client_secret_basic'],
     scopes_supported: ['amazon-sp-api'],
-    code_challenge_methods_supported: ['S256', 'plain']
+    code_challenge_methods_supported: ['S256']
   });
 });
 
-// OAuth metadata at /sse/.well-known path (alternative discovery)
+// OAuth metadata at /sse/.well-known path (alternative discovery) - MCP compliant
 app.get('/sse/.well-known/oauth-authorization-server', (req, res) => {
   const baseUrl = `https://${req.get('host')}`;
 
@@ -117,14 +119,15 @@ app.get('/sse/.well-known/oauth-authorization-server', (req, res) => {
     revocation_endpoint: `${baseUrl}/oauth/revoke`,
     response_types_supported: ['code'],
     grant_types_supported: ['authorization_code', 'refresh_token'],
-    token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic'],
-    scopes_supported: ['amazon-sp-api']
+    token_endpoint_auth_methods_supported: ['none', 'client_secret_post', 'client_secret_basic'],
+    scopes_supported: ['amazon-sp-api'],
+    code_challenge_methods_supported: ['S256']
   });
 });
 
-// OAuth 2.0 Authorization Endpoint
+// OAuth 2.0 Authorization Endpoint with PKCE support
 app.get('/oauth/authorize', (req, res) => {
-  const { client_id, redirect_uri, response_type, scope, state } = req.query;
+  const { client_id, redirect_uri, response_type, scope, state, code_challenge, code_challenge_method } = req.query;
 
   // Validate required parameters
   if (!client_id || !redirect_uri || response_type !== 'code') {
@@ -134,11 +137,19 @@ app.get('/oauth/authorize', (req, res) => {
     });
   }
 
+  // Validate PKCE parameters if provided
+  if (code_challenge && code_challenge_method !== 'S256') {
+    return res.status(400).json({
+      error: 'invalid_request',
+      error_description: 'Only S256 code_challenge_method is supported'
+    });
+  }
+
   // In production, you'd validate client_id and redirect_uri against registered clients
   // For now, we auto-approve
 
-  // Generate authorization code
-  const code = generateAuthCode();
+  // Generate authorization code with PKCE support
+  const code = generateAuthCode(code_challenge, code_challenge_method);
 
   // Redirect back to ChatGPT with code
   const redirectUrl = new URL(redirect_uri);
@@ -150,9 +161,9 @@ app.get('/oauth/authorize', (req, res) => {
   res.redirect(redirectUrl.toString());
 });
 
-// OAuth 2.0 Token Endpoint
+// OAuth 2.0 Token Endpoint with PKCE support
 app.post('/oauth/token', express.urlencoded({ extended: true }), (req, res) => {
-  const { grant_type, code, refresh_token, client_id, client_secret } = req.body;
+  const { grant_type, code, refresh_token, client_id, client_secret, code_verifier } = req.body;
 
   // Handle authorization_code grant
   if (grant_type === 'authorization_code') {
@@ -163,8 +174,8 @@ app.post('/oauth/token', express.urlencoded({ extended: true }), (req, res) => {
       });
     }
 
-    // Validate authorization code
-    const validation = validateAuthCode(code);
+    // Validate authorization code with PKCE verification
+    const validation = validateAuthCode(code, code_verifier);
     if (!validation.valid) {
       return res.status(400).json({
         error: 'invalid_grant',
