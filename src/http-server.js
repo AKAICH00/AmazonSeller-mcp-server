@@ -21,6 +21,17 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Request logging middleware for debugging
+app.use((req, res, next) => {
+  console.log(`📥 ${req.method} ${req.path}`, {
+    userAgent: req.get('user-agent'),
+    contentType: req.get('content-type'),
+    origin: req.get('origin'),
+    referer: req.get('referer')
+  });
+  next();
+});
+
 // Middleware
 app.use(express.json());
 
@@ -95,7 +106,13 @@ app.get('/health', (req, res) => {
 app.get('/.well-known/oauth-authorization-server', (req, res) => {
   const baseUrl = `https://${req.get('host')}`;
 
-  res.json({
+  console.log('🔍 OAuth metadata request:', {
+    userAgent: req.get('user-agent'),
+    host: req.get('host'),
+    headers: req.headers
+  });
+
+  const metadata = {
     issuer: baseUrl,
     authorization_endpoint: `${baseUrl}/oauth/authorize`,
     token_endpoint: `${baseUrl}/oauth/token`,
@@ -105,7 +122,10 @@ app.get('/.well-known/oauth-authorization-server', (req, res) => {
     token_endpoint_auth_methods_supported: ['none', 'client_secret_post', 'client_secret_basic'],
     scopes_supported: ['amazon-sp-api'],
     code_challenge_methods_supported: ['S256']
-  });
+  };
+
+  console.log('📤 Sending OAuth metadata:', metadata);
+  res.json(metadata);
 });
 
 // OAuth metadata at /sse/.well-known path (alternative discovery) - MCP compliant
@@ -129,8 +149,20 @@ app.get('/sse/.well-known/oauth-authorization-server', (req, res) => {
 app.get('/oauth/authorize', (req, res) => {
   const { client_id, redirect_uri, response_type, scope, state, code_challenge, code_challenge_method } = req.query;
 
+  console.log('🔐 OAuth authorization request:', {
+    client_id,
+    redirect_uri,
+    response_type,
+    scope,
+    state,
+    code_challenge: code_challenge ? code_challenge.substring(0, 10) + '...' : 'none',
+    code_challenge_method,
+    userAgent: req.get('user-agent')
+  });
+
   // Validate required parameters
   if (!client_id || !redirect_uri || response_type !== 'code') {
+    console.log('❌ Invalid OAuth authorization request - missing parameters');
     return res.status(400).json({
       error: 'invalid_request',
       error_description: 'Missing or invalid required parameters'
@@ -251,7 +283,11 @@ const sseTransports = new Map();
 // Note: GET doesn't require auth (SSE streams are public), POST requires auth
 app.get('/sse', async (req, res) => {
   try {
-    console.log('SSE connection request from:', req.get('user-agent'));
+    console.log('🌊 SSE connection request:', {
+      userAgent: req.get('user-agent'),
+      query: req.query,
+      headers: req.headers
+    });
 
     // Create a new SSE transport
     const transport = new SSEServerTransport('/sse', res, {
