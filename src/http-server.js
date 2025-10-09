@@ -322,18 +322,30 @@ app.post('/sse', async (req, res) => {
     console.log('📨 SSE POST message:', {
       sessionId,
       hasBody: !!req.body,
-      method: req.body?.method
+      method: req.body?.method,
+      allHeaders: req.headers
     });
 
-    if (!sessionId || !sseTransports.has(sessionId)) {
-      console.log('❌ SSE session not found:', sessionId);
+    // Try to find session from query params if not in header
+    const querySessionId = req.query.sessionId;
+    const actualSessionId = sessionId || querySessionId;
+
+    console.log('🔍 Session lookup:', {
+      fromHeader: sessionId,
+      fromQuery: querySessionId,
+      actualSessionId,
+      activeSessions: Array.from(sseTransports.keys())
+    });
+
+    if (!actualSessionId || !sseTransports.has(actualSessionId)) {
+      console.log('❌ SSE session not found:', actualSessionId);
       return res.status(404).json({ error: 'Session not found. Establish SSE connection first (GET /sse)' });
     }
 
-    const transport = sseTransports.get(sessionId);
+    const transport = sseTransports.get(actualSessionId);
     await transport.handlePostMessage(req, res, req.body);
 
-    console.log(`✅ SSE message processed for session: ${sessionId}`);
+    console.log(`✅ SSE message processed for session: ${actualSessionId}`);
   } catch (error) {
     console.error('❌ Error processing SSE message:', error);
     if (!res.headersSent) {
