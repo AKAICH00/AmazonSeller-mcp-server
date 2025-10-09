@@ -315,20 +315,27 @@ app.get('/sse', async (req, res) => {
   }
 });
 
-app.post('/sse', authenticateApiKey, async (req, res) => {
+app.post('/sse', async (req, res) => {
   try {
     const sessionId = req.headers['mcp-session-id'];
 
+    console.log('📨 SSE POST message:', {
+      sessionId,
+      hasBody: !!req.body,
+      method: req.body?.method
+    });
+
     if (!sessionId || !sseTransports.has(sessionId)) {
+      console.log('❌ SSE session not found:', sessionId);
       return res.status(404).json({ error: 'Session not found. Establish SSE connection first (GET /sse)' });
     }
 
     const transport = sseTransports.get(sessionId);
     await transport.handlePostMessage(req, res, req.body);
 
-    console.log(`SSE message processed for session: ${sessionId}`);
+    console.log(`✅ SSE message processed for session: ${sessionId}`);
   } catch (error) {
-    console.error('Error processing SSE message:', error);
+    console.error('❌ Error processing SSE message:', error);
     if (!res.headersSent) {
       res.status(500).json({ error: 'SSE message failed', message: error.message });
     }
