@@ -89,6 +89,39 @@ app.get('/health', (req, res) => {
   });
 });
 
+// OAuth Configuration Discovery (for OpenAI Custom GPTs)
+app.get('/.well-known/oauth-authorization-server', (req, res) => {
+  const baseUrl = `https://${req.get('host')}`;
+
+  res.json({
+    issuer: baseUrl,
+    authorization_endpoint: `${baseUrl}/oauth/authorize`,
+    token_endpoint: `${baseUrl}/oauth/token`,
+    revocation_endpoint: `${baseUrl}/oauth/revoke`,
+    response_types_supported: ['code'],
+    grant_types_supported: ['authorization_code', 'refresh_token'],
+    token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic'],
+    scopes_supported: ['amazon-sp-api'],
+    code_challenge_methods_supported: ['S256', 'plain']
+  });
+});
+
+// OAuth metadata at /sse/.well-known path (alternative discovery)
+app.get('/sse/.well-known/oauth-authorization-server', (req, res) => {
+  const baseUrl = `https://${req.get('host')}`;
+
+  res.json({
+    issuer: baseUrl,
+    authorization_endpoint: `${baseUrl}/oauth/authorize`,
+    token_endpoint: `${baseUrl}/oauth/token`,
+    revocation_endpoint: `${baseUrl}/oauth/revoke`,
+    response_types_supported: ['code'],
+    grant_types_supported: ['authorization_code', 'refresh_token'],
+    token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic'],
+    scopes_supported: ['amazon-sp-api']
+  });
+});
+
 // OAuth 2.0 Authorization Endpoint
 app.get('/oauth/authorize', (req, res) => {
   const { client_id, redirect_uri, response_type, scope, state } = req.query;
