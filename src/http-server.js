@@ -267,11 +267,8 @@ app.get('/sse', async (req, res) => {
       sseTransports.delete(transport.sessionId);
     };
 
-    // Connect MCP server to this transport
+    // Connect MCP server to this transport (start() is called automatically)
     await server.connect(transport);
-
-    // Start the SSE stream
-    await transport.start();
 
     console.log(`SSE session started: ${transport.sessionId}`);
   } catch (error) {
