@@ -237,9 +237,10 @@ const sessions = new Map();
 const sseTransports = new Map();
 
 // SSE endpoint for OpenAI Custom GPTs - GET establishes stream, POST sends messages
-app.get('/sse', authenticateApiKey, async (req, res) => {
+// Note: GET doesn't require auth (SSE streams are public), POST requires auth
+app.get('/sse', async (req, res) => {
   try {
-    console.log('SSE connection request');
+    console.log('SSE connection request from:', req.get('user-agent'));
 
     // Create a new SSE transport
     const transport = new SSEServerTransport('/sse', res, {
